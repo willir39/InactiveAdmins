@@ -18,7 +18,7 @@ function Invoke-DisableInactiveAccounts {
         # Admin Inactivity Time
         [Parameter(Mandatory = $false)]
         [String]
-        $AdminDuration = '-45',
+        $AdminDuration = '1',
 
         # Account Exclusions
         [Parameter(Mandatory = $false)]
@@ -38,7 +38,7 @@ function Invoke-DisableInactiveAccounts {
         # AD Properties
         [Parameter(Mandatory = $false)]
         [String[]]
-        $Properties = @("SamAccountName", "Enabled", "LastLogonTimestamp", "DisplayName", "DistinguishedName", "PasswordLastSet", "AccountExpirationDate", "Created", "Manager"),
+        $Properties = @("SamAccountName", "Enabled", "LastLogonTimestamp", "DisplayName", "DistinguishedName", "PasswordLastSet", "AccountExpirationDate", "whenCreated", "Manager"),
        
         # Destination OU
         [Parameter()]
@@ -71,7 +71,7 @@ function Invoke-DisableInactiveAccounts {
     )
     if ($DryRun) {
         $Accounts = Get-InactiveAccounts -OutputPath $BaseLocation -TargetOUs $TargetOUs -Domain $Domain -AdminDuration $AdminDuration -Exclude $Exclude -AdminSearchTerms $AdminSearchTerms -DisplayNameSearchTerms $DisplayNameSearchTerms -MembershipSearchTerms $MembershipSearchTerms -Properties $Properties -Force
-        $isNullorEmpty = ($Accounts -eq $null -or $Accounts.Count -eq 0)
+        $isNullorEmpty = ($null -eq $Accounts -or $Accounts.Count -eq 0)
         if ($isNullorEmpty) {
             Write-Host "[DRY RUN] No accounts were found that match the provided criteria." -ForegroundColor Red
             $Body = "[DRY RUN] No accounts were found that match the provided criteria."
@@ -83,7 +83,7 @@ function Invoke-DisableInactiveAccounts {
     }
     elseif (!$DryRun) {
         $Accounts = Get-InactiveAccounts -OutputPath $BaseLocation -TargetOUs $TargetOUs -Domain $Domain -AdminDuration $AdminDuration -Exclude $Exclude -AdminSearchTerms $AdminSearchTerms -DisplayNameSearchTerms $DisplayNameSearchTerms -MembershipSearchTerms $MembershipSearchTerms -Properties $Properties -Force
-        $isNullorEmpty = ($Accounts -eq $null -or $Accounts.Count -eq 0)
+        $isNullorEmpty = ($null -eq $Accounts -or $Accounts.Count -eq 0)
         if ($isNullorEmpty) {
             Write-Host "No accounts were found that match the provided criteria." -ForegroundColor Red
             $Body = "No accounts were found that match the provided criteria."
@@ -102,7 +102,6 @@ function Invoke-DisableInactiveAccounts {
     Remove-Item "$($BaseLocation)*.csv"
     #Stop-Transcript
 }
-
 function Get-InactiveAccounts {
     param (
         # Domain
@@ -164,17 +163,17 @@ function Get-InactiveAccounts {
         $Exclusion = ($Exclude | ForEach-Object { '(SamAccountName -notlike ' + "'$_')" }) -join ' -and '
         $Inclusion = ($AdminSearchTerms | ForEach-Object { '(SamAccountName -like ' + "'$_')" }) -join ' -and '
         $Filter = "$($Exclusion) -and $($Inclusion)"
-        $InactiveAccounts = $AllAccounts | ForEach-Object {
+        $InactiveAccounts = $Accounts | ForEach-Object {
             $TimeSpan = $null
-            if ($_.LastLogonTimestamp -ne $null) {
+            if ($null -ne $_.LastLogonTimestamp) {
                 $TimeSpan = New-TimeSpan -Start ([DateTime]::FromFileTime($_.LastLogonTimestamp)) -End (Get-Date)
             }
-            elseif ($_.whenCreated -ne $null) {
+            elseif ($null -ne $_.whenCreated) {
                 # if LastLogonTimestamp is null
                 $TimeSpan = New-TimeSpan -Start $_.whenCreated -End (Get-Date)
             }
             else {
-                Write-Host "[$($_.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available." -ForegroundColor Yellow
+                Write-Host "[$($_.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available.1" -ForegroundColor Yellow
                 return
             }
             if ($TimeSpan.Days -gt $AdminDuration) { $_ }
@@ -204,15 +203,15 @@ function Get-InactiveAccounts {
     $AdminSearchTerms_InactiveAdmins = @()
     ForEach ($Account in $Accounts) {
         $Timestamp = $null
-        if ($Account.LastLogonTimestamp -ne $null) {
+        if ($null -ne $Account.LastLogonTimestamp) {
             $Timestamp = [datetime]::FromFileTime($Account.LastLogonTimestamp)
         } 
-        elseif ($Account.whenCreated -ne $null) {
+        elseif ($null -ne $Account.whenCreated) {
             # if LastLogonTimestamp is null
             $Timestamp = $Account.whenCreated
         }
         else {
-            Write-Host "[$($Account.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available." -ForegroundColor Yellow
+            Write-Host "[$($Account.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available.2" -ForegroundColor Yellow
             continue
         }
         If ($Timestamp -le $AdminExpiry -and $Account -notin $AdminSearchTerms_InactiveAdmins) {
@@ -267,15 +266,15 @@ function Get-InactiveAccounts {
     }
     ForEach ($Account in $Member_Accounts) {
         $Timestamp = $null
-        if ($Account.LastLogonTimestamp -ne $null) {
+        if ($null -ne $Account.LastLogonTimestamp) {
             $Timestamp = [datetime]::FromFileTime($Account.LastLogonTimestamp)
         } 
-        elseif ($Account.whenCreated -ne $null) {
+        elseif ($null -ne $Account.whenCreated) {
             # if LastLogonTimestamp is null
             $Timestamp = $Account.whenCreated
         }
         else {
-            Write-Host "[$($Account.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available." -ForegroundColor Yellow
+            Write-Host "[$($Account.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available3." -ForegroundColor Yellow
             continue
         }
         $Unfiltered += $Account | Where-Object { $Timestamp -le $AdminExpiry -and $Account -notin $Unfiltered } | Select-Object ($Properties + 'whenCreated')
@@ -331,7 +330,7 @@ function Get-InactiveAccounts {
                 SamAccountName        = $Account.SamAccountName
                 Enabled               = $Account.Enabled
                 LastLogonTimestamp    = [datetime]::FromFileTime($Account.LastLogonTimestamp).ToString('g')
-                Created               = $Account.Created
+                Created               = $Account.whenCreated
                 DisplayName           = $Account.DisplayName
                 DistinguishedName     = $Account.DistinguishedName
                 PasswordLastSet       = $Account.PasswordLastSet
@@ -391,7 +390,8 @@ function Get-InactiveAccounts {
 
     # Always return $TotalAccounts
     Return $TotalAccounts
-    function Send-EmailOnError {
+}
+function Send-EmailOnError {
         param (
             # Result to check
             [Parameter(Mandatory = $true)]
@@ -427,7 +427,7 @@ function Get-InactiveAccounts {
             Send-MailMessage @messageParameters
         }
     }
-    function Set-MoveAccounts {
+function Set-MoveAccounts {
         param (
             # Inactive Accounts
             [Parameter(Mandatory = $true)]
@@ -459,7 +459,7 @@ function Get-InactiveAccounts {
         Set-MoveAccounts -Accounts $InactiveAdmins -DestinationOU $TargetOU
     }
 
-    function Set-DisableAccounts {
+function Set-DisableAccounts {
         param (
             # Target OU
             [Parameter(Mandatory = $true)]
@@ -478,7 +478,7 @@ function Get-InactiveAccounts {
         Write-Host "`n[+] Sending Accounts to Email Function" -ForegroundColor Green
     }
 
-    function Set-Email {
+function Set-Email {
         param (
             # Domain
             [Parameter(Mandatory = $true)]
@@ -555,4 +555,4 @@ $($Accounts | ForEach-Object { "`n$($_.SamAccountName)" })
             Throw $_
         }
     }
-    Invoke-DisableInactiveAccounts
+Invoke-DisableInactiveAccounts
