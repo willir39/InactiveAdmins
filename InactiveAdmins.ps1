@@ -1,5 +1,5 @@
 function Invoke-DisableInactiveAccounts {
-    param (
+    param (a
         # Domain
         [Parameter()]
         [String]
