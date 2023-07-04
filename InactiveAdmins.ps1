@@ -8,7 +8,7 @@ function Invoke-DisableInactiveAccounts {
         # Base Logging Location
         [Parameter()]
         [String]
-        $BaseLocation = "C:\Scripts\Logs",
+        $BaseLocation = "C:\Scripts\Logs\",
 
         # Target OUs
         [Parameter()]
@@ -18,7 +18,7 @@ function Invoke-DisableInactiveAccounts {
         # Admin Inactivity Time
         [Parameter(Mandatory = $false)]
         [String]
-        $AdminDuration = '1',
+        $AdminDuration = '-1',
 
         # Account Exclusions
         [Parameter(Mandatory = $false)]
@@ -53,7 +53,7 @@ function Invoke-DisableInactiveAccounts {
         # SMTP From
         [Parameter()]
         [String]
-        $From = "ryan@wtg.net.au",
+        $From = "PRTG@wtg.net.au",
 
         # SMTP To
         [Parameter()]
@@ -99,7 +99,7 @@ function Invoke-DisableInactiveAccounts {
     Write-Host "=======================`n" -ForegroundColor Red
 
 
-    Remove-Item "$($BaseLocation)*.csv"
+    #Remove-Item "$($BaseLocation)*.csv"
     #Stop-Transcript
 }
 function Get-InactiveAccounts {
@@ -185,7 +185,7 @@ function Get-InactiveAccounts {
         Write-Host "[*] Locating Accounts`n" -ForegroundColor Cyan
         Foreach ($OU in $TargetOUs) {
             Write-Host "[*] Searching in $($OU)" -ForegroundColor Cyan
-            $Accounts += Get-AdUser -Filter $Filter -SearchBase $OU -Properties ($Properties + 'whenCreated') | Select-Object ($Properties + 'whenCreated')
+            $Accounts += Get-AdUser -Filter $Filter -SearchBase $OU -Properties $Properties | Select-Object $Properties
         }
         Write-Host "[+] Found $($Accounts.Length) Accounts" -ForegroundColor Green
     }
@@ -243,7 +243,7 @@ function Get-InactiveAccounts {
             $Groups += $Group.SamAccountName | Where-Object { $Group.SamAccountName -notin $Groups }
         }
 
-        $Groups.Remove($Wildcard)
+        #$Groups.Remove($Wildcard)
     }
 
     Write-Host "[+] Found $($Groups.Count) Groups" -ForegroundColor Green
@@ -277,7 +277,7 @@ function Get-InactiveAccounts {
             Write-Host "[$($Account.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available3." -ForegroundColor Yellow
             continue
         }
-        $Unfiltered += $Account | Where-Object { $Timestamp -le $AdminExpiry -and $Account -notin $Unfiltered } | Select-Object ($Properties + 'whenCreated')
+        $Unfiltered += $Account | Where-Object { $Timestamp -le $AdminExpiry -and $Account -notin $Unfiltered } | Select-Object $Properties
     }
 
     Foreach ($Account in $Unfiltered) {
@@ -460,23 +460,34 @@ function Set-MoveAccounts {
     }
 
 function Set-DisableAccounts {
-        param (
-            # Target OU
-            [Parameter(Mandatory = $true)]
-            [String]
-            $OU
-        )
-        Write-Host "`n===================================" -ForegroundColor Cyan
-        Write-Host "=+= Disabling Inactive Accounts =+=" -ForegroundColor Green
-        Write-Host "===================================`n" -ForegroundColor Cyan
+    param (
+        # Target OU
+        [Parameter(Mandatory = $true)]
+        [String]
+        $OU
+    )
 
-        Write-Host "[*] Disabling Accounts in $($OU)" -ForegroundColor Cyan
-        $DisabledAccounts = Get-ADUser -Filter * -SearchBase $OU 
-        $DisabledAccounts | ForEach-Object { Set-ADUser $_.SamAccountName -Description "Disabled due to inactivity - $(Get-Date)"; $_ } | Disable-ADAccount
-        Write-Host "[+] Disable Complete" -ForegroundColor Green
+    Write-Host "`n===================================" -ForegroundColor Cyan
+    Write-Host "=+= Disabling Inactive Accounts =+=" -ForegroundColor Green
+    Write-Host "===================================`n" -ForegroundColor Cyan
 
-        Write-Host "`n[+] Sending Accounts to Email Function" -ForegroundColor Green
-    }
+    Write-Host "[*] Disabling Accounts in $($OU)" -ForegroundColor Cyan
+
+    $DisabledAccounts = Get-ADUser -Filter * -SearchBase $OU
+
+    $DisabledAccounts | ForEach-Object { 
+        $existingNotes = (Get-ADUser $_.SamAccountName -Properties info).info
+        $newNote = "Disabled due to inactivity - $(Get-Date)"
+        if ($existingNotes) {
+            $newNote = "$existingNotes `r`n$newNote"
+        }
+        Set-ADUser $_.SamAccountName -Replace @{info = $newNote}
+        $_ 
+    } | Disable-ADAccount
+
+    Write-Host "[+] Disable Complete" -ForegroundColor Green
+    Write-Host "`n[+] Sending Accounts to Email Function" -ForegroundColor Green
+}
 
 function Set-Email {
         param (
@@ -505,7 +516,7 @@ function Set-Email {
             # Inactive Accounts
             [Parameter(Mandatory = $false)]
             [Int]
-            $SmtpServerPort = 25,
+            $SmtpServerPort = 2525,
 
             # Inactive Accounts
             [Parameter(Mandatory = $true)]
@@ -538,13 +549,14 @@ $($Accounts | ForEach-Object { "`n$($_.SamAccountName)" })
 `nPlease notify them this action has occurred and that revalidation will be required to reactivate.
 "@
 
-        $Attachments = (get-childitem $AttachmentLocation).fullname
-        $Attachments
+        $LatestCsvFile = Get-ChildItem -Path $AttachmentLocation -Filter *.csv | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+		$Attachments = $LatestCsvFile.FullName
+
         Write-Host "Smtp Config: $($SmtpServer):$($SmtpServerPort)`n" -ForegroundColor Green
         Write-Host "To: $($To)" -ForegroundColor Cyan
         Write-Host "From: $($From)" -ForegroundColor Cyan
         Write-Host "Cc: $($Cc)" -ForegroundColor Cyan
-        Write-Host "`nSubject: $($Subject)" -ForegroundColor Green
+        Write-Host "Subject: $($Subject)" -ForegroundColor Green
 
         Try {
             Send-MailMessage -To $To -From $From -Cc $Cc -Subject $Subject -Body $Body -SmtpServer $SmtpServer -Port $SmtpServerPort -Priority High -DeliveryNotificationOption OnSuccess, OnFailure -ErrorAction Stop -Attachments $Attachments
