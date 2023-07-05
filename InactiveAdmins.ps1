@@ -18,7 +18,7 @@ function Invoke-DisableInactiveAccounts {
         # Admin Inactivity Time
         [Parameter(Mandatory = $false)]
         [String]
-        $AdminDuration = '-1',
+        $AdminDuration = '1',
 
         # Account Exclusions
         [Parameter(Mandatory = $false)]
@@ -70,7 +70,7 @@ function Invoke-DisableInactiveAccounts {
         [Switch]$DryRun
     )
     if ($DryRun) {
-        $Accounts = Get-InactiveAccounts -OutputPath $BaseLocation -TargetOUs $TargetOUs -Domain $Domain -AdminDuration $AdminDuration -Exclude $Exclude -AdminSearchTerms $AdminSearchTerms -DisplayNameSearchTerms $DisplayNameSearchTerms -MembershipSearchTerms $MembershipSearchTerms -Properties $Properties -Force
+        $Accounts = Get-InactiveAccounts -OutputPath $BaseLocation -TargetOUs $TargetOUs -Domain $Domain -AdminDuration $AdminDuration -Exclude $Exclude -AdminSearchTerms $AdminSearchTerms -DisplayNameSearchTerms $DisplayNameSearchTerms -MembershipSearchTerms $MembershipSearchTerms -Properties $Properties -Force -To $To -From $From -SMTPServer $SMTPServer
         $isNullorEmpty = ($null -eq $Accounts -or $Accounts.Count -eq 0)
         if ($isNullorEmpty) {
             Write-Host "[DRY RUN] No accounts were found that match the provided criteria." -ForegroundColor Red
@@ -82,7 +82,7 @@ function Invoke-DisableInactiveAccounts {
         $Accounts | ForEach-Object { Write-Host $_.DistinguishedName }
     }
     elseif (!$DryRun) {
-        $Accounts = Get-InactiveAccounts -OutputPath $BaseLocation -TargetOUs $TargetOUs -Domain $Domain -AdminDuration $AdminDuration -Exclude $Exclude -AdminSearchTerms $AdminSearchTerms -DisplayNameSearchTerms $DisplayNameSearchTerms -MembershipSearchTerms $MembershipSearchTerms -Properties $Properties -Force
+        $Accounts = Get-InactiveAccounts -OutputPath $BaseLocation -TargetOUs $TargetOUs -Domain $Domain -AdminDuration $AdminDuration -Exclude $Exclude -AdminSearchTerms $AdminSearchTerms -DisplayNameSearchTerms $DisplayNameSearchTerms -MembershipSearchTerms $MembershipSearchTerms -Properties $Properties -Force -To $To -From $From -SMTPServer $SMTPServer
         $isNullorEmpty = ($null -eq $Accounts -or $Accounts.Count -eq 0)
         if ($isNullorEmpty) {
             Write-Host "No accounts were found that match the provided criteria." -ForegroundColor Red
@@ -105,17 +105,17 @@ function Invoke-DisableInactiveAccounts {
 function Get-InactiveAccounts {
     param (
         # Domain
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [String]
         $Domain,
 
         # Output Path
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [String]
         $OutputPath,
 
         # Target OUs
-        [Parameter(Mandatory = $true)]
+        [Parameter(Mandatory = $false)]
         [String[]]
         $TargetOUs,
 
@@ -151,7 +151,20 @@ function Get-InactiveAccounts {
 
         # Bypass Safety Prompt
         [Parameter(Mandatory = $false)]
-        [Switch]$Force
+        [Switch]$Force,
+		
+		# Email parameters
+        [Parameter(Mandatory = $false)]
+        [String]
+        $To,
+
+        [Parameter(Mandatory = $false)]
+        [String]
+        $From,
+
+        [Parameter(Mandatory = $false)]
+        [String]
+        $SMTPServer
     )
     Write-Host "`n=================================" -ForegroundColor Cyan
     Write-Host "=+= Finding Inactive Accounts =+=" -ForegroundColor Green
@@ -165,19 +178,20 @@ function Get-InactiveAccounts {
         $Filter = "$($Exclusion) -and $($Inclusion)"
         $InactiveAccounts = $Accounts | ForEach-Object {
             $TimeSpan = $null
-            if ($null -ne $_.LastLogonTimestamp) {
+            $defaultTimestamp = [DateTime]::FromFileTime(0)
+            if ($null -ne $_.LastLogonTimestamp -and [DateTime]::FromFileTime($_.LastLogonTimestamp) -ne $defaultTimestamp) {
                 $TimeSpan = New-TimeSpan -Start ([DateTime]::FromFileTime($_.LastLogonTimestamp)) -End (Get-Date)
-            }
-            elseif ($null -ne $_.whenCreated) {
-                # if LastLogonTimestamp is null
+            } elseif ($null -ne $_.whenCreated) {
+                # if LastLogonTimestamp is null or default
                 $TimeSpan = New-TimeSpan -Start $_.whenCreated -End (Get-Date)
-            }
-            else {
-                Write-Host "[$($_.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available.1" -ForegroundColor Yellow
+            } else {
+                Write-Host "[$($_.SamAccountName)] Skipping. Neither LastLogonTimestamp nor whenCreated are available."
                 return
             }
-            if ($TimeSpan.Days -gt $AdminDuration) { $_ }
-        }
+            if ($TimeSpan.Days -gt $AdminDuration) {
+                $_
+            }
+        }     
         If ($DisplayNameSearchTerms.Length -gt 0) {
             $DisplayNameInclusion = ($DisplayNameSearchTerms | ForEach-Object { '(DisplayName -like ' + "'$_')" }) -join ' -and '
             $Filter = "$($Filter) -and $($DisplayNameInclusion)"
@@ -327,19 +341,28 @@ function Get-InactiveAccounts {
 
         Try {
             $Result = [PSCustomObject]@{
-                SamAccountName        = $Account.SamAccountName
-                Enabled               = $Account.Enabled
-                LastLogonTimestamp    = [datetime]::FromFileTime($Account.LastLogonTimestamp).ToString('g')
-                Created               = $Account.whenCreated
-                DisplayName           = $Account.DisplayName
-                DistinguishedName     = $Account.DistinguishedName
-                PasswordLastSet       = $Account.PasswordLastSet
-                AccountExpirationDate = $Account.AccountExpirationDate
-                Memberships           = $Memberships.Name -join ', '
-                Manager               = $Account.Manager
-            }
+			SamAccountName = $Account.SamAccountName
+			Enabled = $Account.Enabled
+			LastLogonTimestamp = [datetime]::FromFileTime($Account.LastLogonTimestamp).ToString('g')
+			Created = $Account.whenCreated
+			DisplayName = $Account.DisplayName
+			DistinguishedName = $Account.DistinguishedName
+			PasswordLastSet = $Account.PasswordLastSet
+			AccountExpirationDate = $Account.AccountExpirationDate
+			Memberships = $Memberships.Name -join ', '
+			Manager = $Account.Manager
+}
 
-            $TotalAccounts += $Result
+# Check if any property is not as expected
+if ($null -eq $Result.LastLogonTimestamp -or $null -eq $Result.Created) {
+    Write-Host "Error creating result for account $($Account.SamAccountName): One or more properties are not as expected." -ForegroundColor Red
+    Write-Host "LastLogonTimestamp: $($Result.LastLogonTimestamp)"
+    Write-Host "Created: $($Result.Created)"
+    Send-EmailOnError -Result $null -To $To -From $From -Subject "Error processing account" -Body "There was an error processing account $($Account.SamAccountName): One or more properties of the PSCustomObject are not as expected." -SMTPServer $SMTPServer
+    return
+}
+
+$TotalAccounts += $Result
         }
         Catch {
             Write-Host "Error creating result for account $($Account.SamAccountName): $($_.Exception.Message)" -ForegroundColor Red
@@ -394,7 +417,7 @@ function Get-InactiveAccounts {
 function Send-EmailOnError {
         param (
             # Result to check
-            [Parameter(Mandatory = $true)]
+            [Parameter(Mandatory = $false)]
             $Result,
 
             # Email parameters
@@ -475,15 +498,29 @@ function Set-DisableAccounts {
 
     $DisabledAccounts = Get-ADUser -Filter * -SearchBase $OU
 
-    $DisabledAccounts | ForEach-Object { 
-        $existingNotes = (Get-ADUser $_.SamAccountName -Properties info).info
-        $newNote = "Disabled due to inactivity - $(Get-Date)"
-        if ($existingNotes) {
-            $newNote = "$existingNotes `r`n$newNote"
+    $DisabledAccounts | ForEach-Object {
+    $existingNotes = (Get-ADUser $_.SamAccountName -Properties info).info
+    $newNote = "Disabled due to inactivity - $(Get-Date)"
+
+    if ($existingNotes) {
+        # Split the existing notes into an array of lines
+        $existingNotesArray = $existingNotes -split "`r`n"
+
+        # If there are already 3 lines, remove the oldest one
+        if ($existingNotesArray.Count -ge 3) {
+            $existingNotesArray = $existingNotesArray | Select-Object -Skip 1
         }
-        Set-ADUser $_.SamAccountName -Replace @{info = $newNote}
-        $_ 
-    } | Disable-ADAccount
+
+        # Add the new note to the array
+        $existingNotesArray += $newNote
+
+        # Join the array back into a string with line breaks
+        $newNote = $existingNotesArray -join "`r`n"
+    }
+
+    Set-ADUser $_.SamAccountName -Replace @{info = $newNote}
+    $_
+} | Disable-ADAccount
 
     Write-Host "[+] Disable Complete" -ForegroundColor Green
     Write-Host "`n[+] Sending Accounts to Email Function" -ForegroundColor Green
@@ -567,4 +604,4 @@ $($Accounts | ForEach-Object { "`n$($_.SamAccountName)" })
             Throw $_
         }
     }
-Invoke-DisableInactiveAccounts
+Invoke-DisableInactiveAccounts -DryRun
